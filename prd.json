@@ -1,0 +1,257 @@
+{
+  "project": "BlueWard",
+  "version": "3.0.0",
+  "description": "Bluetooth proximity-based screen lock for Linux — next generation features",
+  "methodology": "ralph-wiggum",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Security Hardening",
+      "priority": "high",
+      "tasks": [
+        {
+          "id": "1.1",
+          "title": "Relay Attack Detection",
+          "description": "Detect BLE relay attacks by monitoring for physically impossible RSSI jumps (e.g., device teleports from OUT_OF_RANGE to IMMEDIATE in one reading). Flag sudden RSSI changes exceeding 20dBm between consecutive readings. Also detect unnaturally stable RSSI patterns typical of relayed signals by measuring RSSI variance over a sliding window.",
+          "acceptance_criteria": [
+            "Detect RSSI jumps > 20dBm between consecutive readings and log a warning",
+            "Calculate RSSI variance over a 10-reading sliding window",
+            "Flag variance < 0.5 dBm as suspicious (relayed signal)",
+            "Add relay_attack_detection = true config option under [security]",
+            "Add configurable rssi_jump_threshold and min_rssi_variance",
+            "Unit tests covering jump detection, variance detection, and config parsing",
+            "No false positives during normal walk-away/return scenarios"
+          ],
+          "files_to_modify": ["blueward/security.py (new)", "blueward/service.py", "blueward/config.py", "config.toml", "tests/test_security.py (new)"]
+        },
+        {
+          "id": "1.2",
+          "title": "Require User Activity on Unlock",
+          "description": "Optional soft second factor: after Bluetooth proximity triggers unlock, require keyboard or mouse activity within N seconds. If no activity is detected, re-lock the screen. This prevents relay attacks from silently unlocking an unattended machine.",
+          "acceptance_criteria": [
+            "Monitor X11/Wayland input events after unlock trigger",
+            "If no keyboard/mouse activity within configurable timeout (default 30s), re-lock",
+            "Add unlock_activity_timeout config option under [security]",
+            "Can be disabled by setting timeout to 0",
+            "Desktop notification warns user: 'Move mouse or press a key to confirm unlock'",
+            "Unit tests for timeout logic"
+          ],
+          "files_to_modify": ["blueward/screen.py", "blueward/service.py", "blueward/config.py", "blueward/notifier.py", "config.toml", "tests/test_screen.py"]
+        },
+        {
+          "id": "1.3",
+          "title": "Adapter Failure Auto-Recovery",
+          "description": "Detect when the Bluetooth adapter crashes, is removed, or stops responding. Lock the screen immediately (secure default), notify the user, and attempt to re-initialize when the adapter returns.",
+          "acceptance_criteria": [
+            "Detect adapter power-off or removal via D-Bus signal monitoring",
+            "Lock screen immediately when adapter fails (secure default)",
+            "Notify user: 'Bluetooth adapter lost — screen locked for security'",
+            "Periodically attempt to reconnect (every 10s, configurable)",
+            "Resume normal operation when adapter returns",
+            "Add adapter_recovery_interval to [timing] config",
+            "Unit tests for adapter failure and recovery state transitions"
+          ],
+          "files_to_modify": ["blueward/scanner.py", "blueward/service.py", "blueward/config.py", "blueward/notifier.py", "config.toml", "tests/test_service.py"]
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Proximity Accuracy",
+      "priority": "high",
+      "tasks": [
+        {
+          "id": "2.1",
+          "title": "TX Power Distance Estimation",
+          "description": "Use the BLE advertised TX Power to calculate actual distance instead of raw RSSI. Formula: distance = 10^((txPower - rssi) / (10 * n)) where n is the path-loss exponent. Read TX Power from BlueZ device properties when available, fall back to rssi_at_1m calibration value.",
+          "acceptance_criteria": [
+            "Read TxPower property from BlueZ D-Bus device interface",
+            "Calculate distance using log-distance path loss model",
+            "Add path_loss_exponent config option per device (default 2.0)",
+            "Use calculated distance alongside RSSI for zone classification",
+            "Fall back to pure RSSI when TxPower is not available",
+            "Log estimated distance in verbose mode",
+            "Unit tests for distance calculation with various inputs"
+          ],
+          "files_to_modify": ["blueward/proximity.py", "blueward/scanner.py", "blueward/config.py", "config.toml", "tests/test_proximity.py"]
+        },
+        {
+          "id": "2.2",
+          "title": "Interactive RSSI Calibration Wizard",
+          "description": "Add a 'blueward calibrate' command that guides the user through measuring RSSI at known distances (1m, 3m, 5m). Record samples, compute averages, and auto-configure zone thresholds and rssi_at_1m for their specific device and environment.",
+          "acceptance_criteria": [
+            "New 'blueward calibrate' CLI subcommand",
+            "Prompts user: 'Hold phone at 1 meter... press Enter when ready'",
+            "Collects 20 RSSI samples at each distance (1m, 3m, 5m)",
+            "Computes mean and standard deviation for each distance",
+            "Auto-calculates zone thresholds from measured data",
+            "Writes calibrated values to config.toml (with backup)",
+            "Shows calibration results summary",
+            "Handles case where device is not detected during calibration"
+          ],
+          "files_to_modify": ["blueward/__main__.py", "blueward/calibrate.py (new)", "tests/test_calibrate.py (new)"]
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "User Experience",
+      "priority": "medium",
+      "tasks": [
+        {
+          "id": "3.1",
+          "title": "Tray Icon Snooze / Temporary Disable",
+          "description": "Add a 'Snooze' submenu to the system tray with options: 15 minutes, 30 minutes, 1 hour, Until I resume. During snooze, BlueWard suspends proximity monitoring and shows a snooze indicator. Essential for presentations or when intentionally leaving phone elsewhere.",
+          "acceptance_criteria": [
+            "Snooze submenu in tray with 15m, 30m, 1h, and 'Until resume' options",
+            "Timer-based auto-resume after snooze period",
+            "Tray icon changes to indicate snooze state",
+            "Status label shows 'Snoozed (Xm remaining)'",
+            "Desktop notification when snooze starts and ends",
+            "Snooze state survives tray icon rebuild but not service restart",
+            "Unit tests for snooze timer logic"
+          ],
+          "files_to_modify": ["blueward/tray.py", "blueward/service.py", "blueward/notifier.py", "tests/test_service.py"]
+        },
+        {
+          "id": "3.2",
+          "title": "Zone-Triggered Custom Actions",
+          "description": "Allow users to configure custom commands for each zone transition, not just lock/unlock. For example: dim screen when entering FAR zone, pause media when leaving NEAR, run arbitrary scripts per zone.",
+          "acceptance_criteria": [
+            "New [actions.zones] config section with on_immediate, on_near, on_far, on_out_of_range",
+            "Each zone action is a shell command string",
+            "Actions fire on zone transitions (not continuously)",
+            "Previous zone's exit action fires before new zone's enter action",
+            "Actions are optional — empty string means no action",
+            "Log each action execution in verbose mode",
+            "Unit tests for zone action dispatch"
+          ],
+          "files_to_modify": ["blueward/config.py", "blueward/service.py", "blueward/screen.py", "config.toml", "tests/test_service.py", "tests/test_config.py"]
+        },
+        {
+          "id": "3.3",
+          "title": "Graduated Warnings Before Lock",
+          "description": "Instead of a single notification then lock, implement escalating warnings: (1) subtle notification when entering FAR zone, (2) screen dim when grace period starts, (3) lock when grace period expires. Give the user visual feedback and time to return.",
+          "acceptance_criteria": [
+            "Notification when device enters FAR zone: 'Device getting far'",
+            "Optional screen dimming during DEVICE_LEAVING grace period",
+            "Restore brightness if device returns during grace period",
+            "Add graduated_warnings = true config option",
+            "Add dim_percentage = 50 config option (how much to dim)",
+            "Works on GNOME, KDE (via D-Bus brightness API)",
+            "Falls back gracefully if brightness control is unavailable"
+          ],
+          "files_to_modify": ["blueward/screen.py", "blueward/service.py", "blueward/notifier.py", "blueward/config.py", "config.toml"]
+        },
+        {
+          "id": "3.4",
+          "title": "Event History and Audit Log",
+          "description": "Maintain a structured JSON log of all lock/unlock events with timestamps, device info, RSSI at time of event, and trigger reason. Viewable from tray icon menu and useful for debugging and security auditing.",
+          "acceptance_criteria": [
+            "JSON Lines log file at ~/.local/share/blueward/events.jsonl",
+            "Each event: timestamp, event_type, device_name, device_mac, rssi, zone, trigger",
+            "Event types: lock, unlock, snooze, resume, adapter_error, adapter_recovered",
+            "Tray menu item: 'Recent Events' showing last 10 events",
+            "Log rotation: keep last 10,000 events (configurable)",
+            "Add event_log = true and event_log_max_entries config options",
+            "Unit tests for event logging and rotation"
+          ],
+          "files_to_modify": ["blueward/events.py (new)", "blueward/service.py", "blueward/tray.py", "blueward/config.py", "config.toml", "tests/test_events.py (new)"]
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Integration and Automation",
+      "priority": "medium",
+      "tasks": [
+        {
+          "id": "4.1",
+          "title": "D-Bus API",
+          "description": "Expose BlueWard's state over D-Bus (org.blueward.Service) so other applications, scripts, and desktop environments can query proximity status, subscribe to state changes, and control the service.",
+          "acceptance_criteria": [
+            "D-Bus service at org.blueward.Service on session bus",
+            "Properties: State, DeviceZone, DeviceRssi, IsPaused, IsSnoozing",
+            "Methods: Pause(), Resume(), Snooze(minutes), GetDeviceInfo()",
+            "Signals: StateChanged(old, new), DeviceZoneChanged(mac, zone)",
+            "Introspectable interface for discovery",
+            "Unit tests with mocked D-Bus"
+          ],
+          "files_to_modify": ["blueward/dbus_api.py (new)", "blueward/service.py", "tests/test_dbus_api.py (new)"]
+        },
+        {
+          "id": "4.2",
+          "title": "Smart Media Control",
+          "description": "Built-in playerctl integration that intelligently pauses media on lock and resumes on unlock. Only pause if something is actually playing, only resume what was paused by BlueWard (not manually paused media).",
+          "acceptance_criteria": [
+            "Detect if media is currently playing via playerctl before pausing",
+            "Track which players were paused by BlueWard",
+            "Only resume players that BlueWard paused",
+            "Add media_control = true config option",
+            "Works with Spotify, Firefox, VLC, and any MPRIS-compatible player",
+            "Graceful fallback if playerctl is not installed",
+            "Unit tests for pause/resume tracking logic"
+          ],
+          "files_to_modify": ["blueward/media.py (new)", "blueward/service.py", "blueward/config.py", "config.toml", "tests/test_media.py (new)"]
+        },
+        {
+          "id": "4.3",
+          "title": "Device Battery Level Display",
+          "description": "Read the trusted device's battery level from BLE GATT Battery Service (0x180F) or BlueZ cached properties. Display in tray icon tooltip and warn when battery is low (dead phone = unexpected lockout).",
+          "acceptance_criteria": [
+            "Read battery level from BlueZ Device1.Battery property or GATT",
+            "Display battery percentage in tray tooltip",
+            "Low battery notification when below 20% (configurable threshold)",
+            "Critical battery notification when below 10%",
+            "Tray menu shows: 'Device: My Phone (72%)'",
+            "Graceful handling when battery info is unavailable",
+            "Add battery_warning_threshold config option"
+          ],
+          "files_to_modify": ["blueward/scanner.py", "blueward/tray.py", "blueward/notifier.py", "blueward/config.py", "config.toml"]
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Wayland and Desktop Compatibility",
+      "priority": "low",
+      "tasks": [
+        {
+          "id": "5.1",
+          "title": "Wayland Compositor Support",
+          "description": "Ensure lock/unlock and screen brightness control work on Wayland compositors: GNOME Wayland, KDE Plasma Wayland, Sway, Hyprland. Some D-Bus interfaces differ between X11 and Wayland.",
+          "acceptance_criteria": [
+            "Lock works on: GNOME Wayland, KDE Wayland, Sway (swaylock), Hyprland (hyprlock)",
+            "Unlock works or gracefully degrades on each",
+            "Auto-detect compositor and use appropriate lock command",
+            "Screen brightness control works on Wayland",
+            "Document any compositor-specific limitations",
+            "Add wayland_lock_command config override"
+          ],
+          "files_to_modify": ["blueward/screen.py", "blueward/config.py", "config.toml"]
+        },
+        {
+          "id": "5.2",
+          "title": "Systemd Watchdog Integration",
+          "description": "Integrate with systemd's watchdog mechanism (WatchdogSec) to auto-restart BlueWard if it hangs. The service periodically notifies systemd it's alive; if it stops, systemd restarts it.",
+          "acceptance_criteria": [
+            "Send sd_notify WATCHDOG=1 every N seconds from the main loop",
+            "Update blueward.service with WatchdogSec=30",
+            "Lock screen on unclean restart (WATCHDOG_USEC timeout)",
+            "Log watchdog notifications in debug mode",
+            "Works without systemd (graceful no-op)"
+          ],
+          "files_to_modify": ["blueward/service.py", "blueward.service", "contrib/blueward.service"]
+        }
+      ]
+    }
+  ],
+  "completion_promise": "ALL_PHASES_COMPLETE",
+  "ralph_config": {
+    "max_iterations_per_task": 25,
+    "testing_required": true,
+    "test_command": "python3 -m pytest tests/ -v",
+    "lint_command": "python3 -m ruff check blueward/",
+    "functional_test": "timeout 15 blueward --verbose --no-tray --no-notify"
+  }
+}

@@ -57,7 +57,8 @@ def notify_device_nearby(device_name: str):
 def notify_adapter_error():
     notify(
         APP_NAME,
-        "Bluetooth adapter error. Check that Bluetooth is enabled.",
+        "Bluetooth adapter not found or BlueZ service not running.\n"
+        "Run: sudo systemctl start bluetooth",
         icon="dialog-error",
         urgency="critical",
     )

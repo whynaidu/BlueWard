@@ -81,6 +81,13 @@ class BlueWardService:
                 return
         except Exception as e:
             log.error("Failed to connect to BlueZ: %s", e)
+            log.error("")
+            log.error("Troubleshooting steps:")
+            log.error("  1. Check if Bluetooth hardware is present:  rfkill list bluetooth")
+            log.error("  2. Start the BlueZ service:                 sudo systemctl start bluetooth")
+            log.error("  3. Enable it on boot:                       sudo systemctl enable bluetooth")
+            log.error("  4. If no adapter exists, you need a USB Bluetooth dongle")
+            log.error("")
             self._transition(State.ADAPTER_ERROR)
             if self.config.notifications:
                 notify_adapter_error()

@@ -116,10 +116,41 @@ else
     warn "l2ping not found. Classic BT fallback won't work."
 fi
 
+# --- Check Bluetooth readiness ---
+
+BT_OK=true
+
+if ! systemctl is-active --quiet bluetooth 2>/dev/null; then
+    warn "BlueZ service is not running."
+    warn "  Start it:   sudo systemctl start bluetooth"
+    warn "  On boot:    sudo systemctl enable bluetooth"
+    BT_OK=false
+fi
+
+if command -v rfkill &>/dev/null; then
+    if rfkill list bluetooth 2>/dev/null | grep -q "Soft blocked: yes"; then
+        warn "Bluetooth is soft-blocked. Unblock with: rfkill unblock bluetooth"
+        BT_OK=false
+    fi
+    if rfkill list bluetooth 2>/dev/null | grep -q "Hard blocked: yes"; then
+        warn "Bluetooth is hardware-blocked. Check your laptop's physical switch or BIOS."
+        BT_OK=false
+    fi
+fi
+
+if ! hciconfig hci0 &>/dev/null 2>&1 && ! bluetoothctl show &>/dev/null 2>&1; then
+    warn "No Bluetooth adapter detected. You may need a USB Bluetooth dongle."
+    BT_OK=false
+fi
+
 # --- Done ---
 
 echo ""
-echo -e "${BOLD}${GREEN}BlueWard installed successfully!${NC}"
+if [[ "$BT_OK" == "false" ]]; then
+    echo -e "${BOLD}${YELLOW}BlueWard installed, but Bluetooth needs attention (see warnings above).${NC}"
+else
+    echo -e "${BOLD}${GREEN}BlueWard installed successfully!${NC}"
+fi
 echo ""
 echo "Next steps:"
 echo "  1. Find your phone's Bluetooth MAC address:"

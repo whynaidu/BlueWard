@@ -1,0 +1,55 @@
+[blueward]
+# Scan interval in seconds between BLE scan cycles
+scan_interval = 2.0
+
+# How long device must be out-of-range before locking (seconds)
+lock_delay = 4
+
+# How long device must be in-range before clearing lock warning (seconds)
+unlock_delay = 1
+
+# Enable desktop notifications
+notifications = true
+
+# Enable system tray icon
+tray_icon = true
+
+# Log RSSI readings to file for calibration
+log_rssi = false
+rssi_log_path = "~/.local/share/blueward/rssi.log"
+
+[[devices]]
+name = "My Phone"
+mac = "84:0F:4C:80:76:4E"
+# Calibration: RSSI at 1 meter (hold phone 1m away and note average RSSI)
+rssi_at_1m = -55
+
+# Zone thresholds (RSSI in dBm) — higher = closer
+[devices.zones]
+immediate = -45    # Very close (< 0.5m)
+near = -60         # Normal range (0.5-2m)
+far = -75          # Getting far (2-5m)
+# Below 'far' = OUT_OF_RANGE → triggers lock
+
+# Multi-device policy: "any" = lock when ANY device is out of range
+#                      "all" = lock when ALL devices are out of range
+[blueward.policy]
+mode = "all"
+
+[actions]
+# Custom commands to run on lock/unlock events (optional)
+lock_command = ""            # Override default D-Bus lock (leave empty to use default)
+unlock_command = ""          # Override default unlock (leave empty for notify-only)
+on_lock_extra = ""           # Extra command on lock, e.g. "playerctl pause"
+on_unlock_extra = ""         # Extra command on unlock, e.g. "playerctl play"
+
+[filter]
+# Kalman filter parameters
+process_noise = 0.008
+measurement_noise = 4.0
+
+# Exponential moving average alpha (0-1, lower = smoother)
+ema_alpha = 0.3
+
+# Which filter to use: "kalman" or "ema"
+method = "kalman"

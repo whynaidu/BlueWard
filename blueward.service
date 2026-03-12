@@ -1,0 +1,21 @@
+# BlueWard systemd user service
+# Install: cp blueward.service ~/.config/systemd/user/
+# Enable:  systemctl --user enable --now blueward.service
+# Logs:    journalctl --user -u blueward -f
+
+[Unit]
+Description=BlueWard Bluetooth Proximity Screen Locker
+After=bluetooth.target graphical-session.target
+Wants=bluetooth.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/blueward
+Restart=on-failure
+RestartSec=5
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target

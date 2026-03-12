@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# IDE / tooling
+.claude/
+.pytest_cache/
+.ruff_cache/

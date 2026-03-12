@@ -24,7 +24,7 @@ sys.modules.setdefault("dbus.service", MagicMock())
 sys.modules.setdefault("dbus.mainloop", MagicMock())
 sys.modules.setdefault("dbus.mainloop.glib", MagicMock())
 
-from blueward.config import ActionsConfig, Config, Device, FilterConfig, ZoneThresholds
+from blueward.config import ActionsConfig, Config, Device, FilterConfig, TimingConfig, ZoneThresholds
 from blueward.devices import DeviceRegistry
 from blueward.proximity import ProximityZone
 from blueward.service import BlueWardService, State
@@ -427,6 +427,85 @@ class TestMultiDevice:
         # Watch is OOR by default
         svc._evaluate_lock_state()
         assert svc.state == State.DEVICE_LEAVING
+
+
+# ---------------------------------------------------------------------------
+# _device_summary
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Timing config integration
+# ---------------------------------------------------------------------------
+
+class TestTimingIntegration:
+    @patch("blueward.service.lock_screen", return_value=True)
+    @patch("blueward.service.is_locked", return_value=False)
+    def test_custom_lock_delay_used(self, mock_is_locked, mock_lock):
+        """Service uses timing.lock_delay, not a hardcoded value."""
+        cfg = _make_config(lock_delay=0)
+        assert cfg.timing.lock_delay == 0  # __post_init__ syncs
+        svc = BlueWardService(cfg)
+        svc._transition(State.DEVICE_LEAVING)
+
+        svc._check_timeouts()
+
+        assert svc.state == State.DEVICE_AWAY
+        mock_lock.assert_called_once()
+
+    @patch("blueward.service.lock_screen")
+    @patch("blueward.service.is_locked", return_value=False)
+    def test_large_lock_delay_prevents_lock(self, mock_is_locked, mock_lock):
+        cfg = _make_config(lock_delay=999)
+        assert cfg.timing.lock_delay == 999
+        svc = BlueWardService(cfg)
+        svc._transition(State.DEVICE_LEAVING)
+
+        svc._check_timeouts()
+
+        assert svc.state == State.DEVICE_LEAVING
+        mock_lock.assert_not_called()
+
+    @patch("blueward.service.run_custom_command", return_value=True)
+    @patch("blueward.service.lock_screen")
+    @patch("blueward.service.is_locked", return_value=False)
+    def test_custom_unlock_delay_used(self, mock_is_locked, mock_lock, mock_cmd):
+        cfg = _make_config(unlock_delay=0)
+        assert cfg.timing.unlock_delay == 0
+        svc = BlueWardService(cfg)
+        svc._transition(State.DEVICE_APPROACHING)
+        device = svc.devices.get("AA:BB:CC:DD:EE:FF")
+        device.zone = ProximityZone.NEAR
+        device.last_seen = time.monotonic()
+
+        svc._check_timeouts()
+
+        assert svc.state == State.DEVICE_NEAR
+
+    def test_stale_multiplier_respected(self):
+        """Stale timeout = lock_delay * stale_multiplier."""
+        cfg = _make_config(lock_delay=10)
+        cfg.timing.stale_multiplier = 2  # stale after 20s
+        svc = BlueWardService(cfg)
+        svc._transition(State.SCANNING)
+        device = svc.devices.get("AA:BB:CC:DD:EE:FF")
+        device.zone = ProximityZone.NEAR
+
+        # 15s old — less than 10*2=20, should NOT be stale
+        device.last_seen = time.monotonic() - 15.0
+        svc._check_timeouts()
+        assert device.zone == ProximityZone.NEAR
+
+        # 25s old — more than 10*2=20, should be marked OOR
+        device.last_seen = time.monotonic() - 25.0
+        svc._check_timeouts()
+        assert device.zone == ProximityZone.OUT_OF_RANGE
+
+    def test_config_timing_sync_in_make_config(self):
+        """_make_config properly syncs top-level to timing via __post_init__."""
+        cfg = _make_config(lock_delay=5, unlock_delay=2)
+        assert cfg.timing.lock_delay == 5
+        assert cfg.timing.unlock_delay == 2
+        assert cfg.timing.scan_interval == 2.0
 
 
 # ---------------------------------------------------------------------------

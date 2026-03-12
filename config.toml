@@ -54,6 +54,8 @@ l2ping_timeout = 2         # How long to wait for an l2ping response
 rssi_high_timeout = 3      # BlueZ AdvMonitor: seconds device must be "near"
 rssi_low_timeout = 10      # BlueZ AdvMonitor: seconds device must be "far" before lost
 stale_multiplier = 3       # Mark device stale after lock_delay × this value
+idle_poll_multiplier = 5   # In stable states (NEAR/AWAY), poll 5× slower to save battery
+idle_l2ping_multiplier = 6 # In stable states, l2ping 6× less often (5s × 6 = every 30s)
 
 [filter]
 # Kalman filter parameters

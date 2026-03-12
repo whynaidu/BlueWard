@@ -33,6 +33,11 @@ class State(Enum):
 class BlueWardService:
     """Main service coordinating scanning, proximity, and screen actions."""
 
+    # States where we need fast, responsive polling
+    _ACTIVE_STATES = frozenset({
+        State.SCANNING, State.DEVICE_LEAVING, State.DEVICE_APPROACHING,
+    })
+
     def __init__(self, config: Config):
         self.config = config
         self.state = State.INITIALIZING
@@ -40,6 +45,7 @@ class BlueWardService:
         self._paused = False
         self._loop: GLib.MainLoop | None = None
         self._timeout_id: int | None = None
+        self._current_check_interval: int = config.timing.check_interval
 
         # Callbacks for UI (tray icon updates)
         self._on_state_change: list = []
@@ -118,7 +124,19 @@ class BlueWardService:
 
         self._transition(State.SCANNING)
 
-        # Periodic timeout check
+        # Run an initial l2ping check for all devices before evaluating state,
+        # so we don't falsely trigger DEVICE_LEAVING on startup.
+        self._startup_ping_pending = len(self.config.devices)
+        for device in self.devices.all_devices():
+            device._l2ping_pending = True
+            device._last_l2ping = time.monotonic()
+            threading.Thread(
+                target=self._startup_ping,
+                args=(device.mac,),
+                daemon=True,
+            ).start()
+
+        # Periodic timeout check — start after a short delay to let startup pings complete
         self._timeout_id = GLib.timeout_add_seconds(
             self.config.timing.check_interval, self._check_timeouts
         )
@@ -220,6 +238,10 @@ class BlueWardService:
 
     def _evaluate_lock_state(self):
         """Evaluate whether to lock/unlock based on all device states."""
+        # Don't evaluate until startup pings have completed
+        if getattr(self, '_startup_ping_pending', 0) > 0:
+            return
+
         if self.devices.should_lock():
             if self.state not in (State.DEVICE_AWAY, State.DEVICE_LEAVING):
                 self._transition(State.DEVICE_LEAVING)
@@ -247,25 +269,28 @@ class BlueWardService:
         if self._paused:
             return True
 
+        # Don't evaluate lock state until startup pings have completed
+        if getattr(self, '_startup_ping_pending', 0) > 0:
+            return True
+
         now = time.monotonic()
+        is_stable = self.state not in self._ACTIVE_STATES
 
         # l2ping fallback for Classic BT devices that don't show up in BLE scans.
-        # Only poll when device state is uncertain — NOT when already confirmed NEAR.
-        # This avoids constant BT connection churn on the phone.
-        L2PING_INTERVAL = self.config.timing.l2ping_interval
+        # In stable states (DEVICE_NEAR, DEVICE_AWAY), ping much less often to save battery.
+        base_interval = self.config.timing.l2ping_interval
+        if is_stable:
+            l2ping_interval = base_interval * self.config.timing.idle_l2ping_multiplier
+        else:
+            l2ping_interval = base_interval
+
         for device in self.devices.all_devices():
             last_ping = getattr(device, '_last_l2ping', 0)
             since_ping = now - last_ping
 
-            # Skip l2ping if:
-            # - device is confirmed NEAR/IMMEDIATE and was seen recently (no need to re-check)
-            # - a ping is already in flight
-            # - we pinged too recently
-            if device.zone in (ProximityZone.NEAR, ProximityZone.IMMEDIATE) and device.age < L2PING_INTERVAL:
-                continue
             if getattr(device, '_l2ping_pending', False):
                 continue
-            if since_ping < L2PING_INTERVAL:
+            if since_ping < l2ping_interval:
                 continue
 
             device._l2ping_pending = True
@@ -277,7 +302,14 @@ class BlueWardService:
             ).start()
 
         # Check for stale devices (no signal received)
-        no_signal_timeout = self.config.lock_delay * self.config.timing.stale_multiplier
+        # In idle mode, stale timeout must be at least 2× the idle l2ping interval
+        # to avoid false positives from slow polling.
+        base_stale = self.config.timing.lock_delay * self.config.timing.stale_multiplier
+        if is_stable:
+            idle_l2ping = base_interval * self.config.timing.idle_l2ping_multiplier
+            no_signal_timeout = max(base_stale, idle_l2ping * 2)
+        else:
+            no_signal_timeout = base_stale
         for device in self.devices.stale_devices(no_signal_timeout):
             if device.zone != ProximityZone.OUT_OF_RANGE:
                 log.warning("%s: no signal for %.0fs, marking out of range", device.name, device.age)
@@ -286,7 +318,7 @@ class BlueWardService:
         # Handle DEVICE_LEAVING grace period
         if self.state == State.DEVICE_LEAVING:
             elapsed = now - self._state_entered_at
-            if elapsed >= self.config.lock_delay:
+            if elapsed >= self.config.timing.lock_delay:
                 # Grace period expired - still should lock?
                 if self.devices.should_lock():
                     self._do_lock()
@@ -294,7 +326,7 @@ class BlueWardService:
         # Handle DEVICE_APPROACHING confirmation period
         if self.state == State.DEVICE_APPROACHING:
             elapsed = now - self._state_entered_at
-            if elapsed >= self.config.unlock_delay:
+            if elapsed >= self.config.timing.unlock_delay:
                 if self.devices.any_device_near():
                     self._transition(State.DEVICE_NEAR)
                     # Auto-unlock if screen is locked
@@ -313,6 +345,31 @@ class BlueWardService:
                 self._transition(State.DEVICE_LEAVING)
 
         return True  # Keep timer running
+
+    def _startup_ping(self, mac: str):
+        """Initial l2ping on startup to detect devices before evaluating state."""
+        reachable = try_l2ping(mac, timeout=self.config.timing.l2ping_timeout)
+        GLib.idle_add(self._startup_ping_result, mac, reachable)
+
+    def _startup_ping_result(self, mac: str, reachable: bool):
+        """Handle startup l2ping result on the GLib main thread."""
+        device = self.devices.get(mac)
+        if device is not None:
+            device._l2ping_pending = False
+            if reachable:
+                device.last_seen = time.monotonic()
+                device.zone = ProximityZone.NEAR
+                log.info("%s: found nearby on startup via l2ping", device.name)
+            else:
+                log.info("%s: not reachable on startup", device.name)
+
+        self._startup_ping_pending -= 1
+        if self._startup_ping_pending <= 0:
+            # All startup pings done — now evaluate initial state
+            self._startup_ping_pending = 0
+            self._evaluate_lock_state()
+            log.debug("Startup device check complete")
+        return False
 
     def _l2ping_poll(self, mac: str):
         """Run l2ping in a background thread, then schedule result on the main loop."""
@@ -361,6 +418,24 @@ class BlueWardService:
                         notify_locked(d.name)
                         break
 
+    def _get_check_interval(self, state: State) -> int:
+        """Return the appropriate check interval for a given state."""
+        base = self.config.timing.check_interval
+        if state in self._ACTIVE_STATES:
+            return base
+        return base * self.config.timing.idle_poll_multiplier
+
+    def _reschedule_timer(self, new_interval: int):
+        """Reschedule the GLib check timer if the interval changed."""
+        if new_interval == self._current_check_interval:
+            return
+        old = self._current_check_interval
+        self._current_check_interval = new_interval
+        if self._timeout_id is not None:
+            GLib.source_remove(self._timeout_id)
+        self._timeout_id = GLib.timeout_add_seconds(new_interval, self._check_timeouts)
+        log.debug("Poll interval: %ds -> %ds", old, new_interval)
+
     def _transition(self, new_state: State):
         """Transition to a new state."""
         old = self.state
@@ -370,6 +445,9 @@ class BlueWardService:
         self.state = new_state
         self._state_entered_at = time.monotonic()
         log.debug("State: %s -> %s", old.name, new_state.name)
+
+        # Adapt polling speed: fast for active states, slow for stable states
+        self._reschedule_timer(self._get_check_interval(new_state))
 
         for cb in self._on_state_change:
             cb(old, new_state, self._device_summary())

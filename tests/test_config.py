@@ -10,6 +10,7 @@ from blueward.config import (
     Config,
     Device,
     FilterConfig,
+    TimingConfig,
     ZoneThresholds,
     load_config,
 )
@@ -225,3 +226,120 @@ mac = "aa:bb:cc:dd:ee:ff"
         p.write_text(toml_content)
         cfg = load_config(str(p))
         assert cfg.devices[0].mac == "AA:BB:CC:DD:EE:FF"
+
+
+# ---------------------------------------------------------------------------
+# TimingConfig defaults
+# ---------------------------------------------------------------------------
+
+class TestTimingConfigDefaults:
+    def test_timing_defaults(self):
+        t = TimingConfig()
+        assert t.scan_interval == 2.0
+        assert t.lock_delay == 8
+        assert t.unlock_delay == 3
+        assert t.check_interval == 2
+        assert t.l2ping_interval == 5
+        assert t.l2ping_timeout == 2
+        assert t.rssi_high_timeout == 3
+        assert t.rssi_low_timeout == 10
+        assert t.stale_multiplier == 3
+
+    def test_config_creates_timing(self):
+        c = Config()
+        assert isinstance(c.timing, TimingConfig)
+
+    def test_post_init_syncs_timing(self):
+        """Top-level lock_delay/unlock_delay/scan_interval sync into timing."""
+        c = Config(lock_delay=20, unlock_delay=5, scan_interval=4.0)
+        assert c.timing.lock_delay == 20
+        assert c.timing.unlock_delay == 5
+        assert c.timing.scan_interval == 4.0
+
+    def test_post_init_overrides_timing_defaults(self):
+        """Even if a default TimingConfig is passed, post_init syncs from top-level."""
+        c = Config(lock_delay=0, timing=TimingConfig(lock_delay=99))
+        assert c.timing.lock_delay == 0
+
+
+# ---------------------------------------------------------------------------
+# load_config with [timing] section
+# ---------------------------------------------------------------------------
+
+TIMING_TOML = """\
+[blueward]
+notifications = true
+
+[timing]
+scan_interval = 5.0
+lock_delay = 15
+unlock_delay = 7
+check_interval = 4
+l2ping_interval = 10
+l2ping_timeout = 3
+rssi_high_timeout = 5
+rssi_low_timeout = 20
+stale_multiplier = 5
+"""
+
+TIMING_OVERRIDE_TOML = """\
+[blueward]
+lock_delay = 10
+
+[timing]
+lock_delay = 20
+"""
+
+TIMING_FALLBACK_TOML = """\
+[blueward]
+lock_delay = 12
+"""
+
+
+class TestTimingSection:
+    def test_timing_section_parsed(self, tmp_path):
+        p = tmp_path / "cfg.toml"
+        p.write_text(TIMING_TOML)
+        cfg = load_config(str(p))
+        assert cfg.timing.scan_interval == 5.0
+        assert cfg.timing.lock_delay == 15
+        assert cfg.timing.unlock_delay == 7
+        assert cfg.timing.check_interval == 4
+        assert cfg.timing.l2ping_interval == 10
+        assert cfg.timing.l2ping_timeout == 3
+        assert cfg.timing.rssi_high_timeout == 5
+        assert cfg.timing.rssi_low_timeout == 20
+        assert cfg.timing.stale_multiplier == 5
+
+    def test_timing_syncs_to_top_level(self, tmp_path):
+        """[timing] values are also reflected in top-level config fields."""
+        p = tmp_path / "cfg.toml"
+        p.write_text(TIMING_TOML)
+        cfg = load_config(str(p))
+        assert cfg.lock_delay == 15
+        assert cfg.unlock_delay == 7
+        assert cfg.scan_interval == 5.0
+
+    def test_timing_overrides_blueward_section(self, tmp_path):
+        """[timing] takes precedence over [blueward] for shared keys."""
+        p = tmp_path / "cfg.toml"
+        p.write_text(TIMING_OVERRIDE_TOML)
+        cfg = load_config(str(p))
+        assert cfg.lock_delay == 20
+        assert cfg.timing.lock_delay == 20
+
+    def test_blueward_fallback_when_no_timing(self, tmp_path):
+        """Without [timing], [blueward] values are used."""
+        p = tmp_path / "cfg.toml"
+        p.write_text(TIMING_FALLBACK_TOML)
+        cfg = load_config(str(p))
+        assert cfg.lock_delay == 12
+        assert cfg.timing.lock_delay == 12
+
+    def test_no_timing_section_uses_defaults(self, tmp_path):
+        p = tmp_path / "cfg.toml"
+        p.write_text("[blueward]\nnotifications = false\n")
+        cfg = load_config(str(p))
+        assert cfg.timing.check_interval == 2
+        assert cfg.timing.l2ping_interval == 5
+        assert cfg.timing.stale_multiplier == 3

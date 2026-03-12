@@ -44,12 +44,14 @@ class TimingConfig:
     scan_interval: float = 2.0
     lock_delay: int = 8
     unlock_delay: int = 3
-    check_interval: int = 2          # GLib poll interval (seconds)
+    check_interval: int = 2          # GLib poll interval (seconds) during active states
     l2ping_interval: int = 5         # Seconds between l2ping fallback attempts
     l2ping_timeout: int = 2          # l2ping response timeout (seconds)
     rssi_high_timeout: int = 3       # BlueZ AdvMonitor RSSI high timeout
     rssi_low_timeout: int = 10       # BlueZ AdvMonitor RSSI low timeout
     stale_multiplier: int = 3        # Mark device stale after lock_delay * this
+    idle_poll_multiplier: int = 5    # In stable states, poll this much less often
+    idle_l2ping_multiplier: int = 6  # In stable states, l2ping this much less often
 
 
 @dataclass
@@ -66,6 +68,13 @@ class Config:
     filter: FilterConfig = field(default_factory=FilterConfig)
     actions: ActionsConfig = field(default_factory=ActionsConfig)
     timing: TimingConfig = field(default_factory=TimingConfig)
+
+    def __post_init__(self):
+        # Keep timing and top-level fields in sync — timing is the source of truth
+        # for the service, but top-level fields are kept for backward compatibility.
+        self.timing.scan_interval = self.scan_interval
+        self.timing.lock_delay = self.lock_delay
+        self.timing.unlock_delay = self.unlock_delay
 
 
 def load_config(path: Optional[str] = None) -> Config:
@@ -121,6 +130,8 @@ def load_config(path: Optional[str] = None) -> Config:
         rssi_high_timeout=tmg.get("rssi_high_timeout", 3),
         rssi_low_timeout=tmg.get("rssi_low_timeout", 10),
         stale_multiplier=tmg.get("stale_multiplier", 3),
+        idle_poll_multiplier=tmg.get("idle_poll_multiplier", 5),
+        idle_l2ping_multiplier=tmg.get("idle_l2ping_multiplier", 6),
     )
 
     return Config(

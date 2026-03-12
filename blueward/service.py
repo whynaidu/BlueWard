@@ -102,6 +102,8 @@ class BlueWardService:
                 trusted_macs=self.devices.trusted_macs,
                 rssi_high=self.config.devices[0].zones.near if self.config.devices else -60,
                 rssi_low=self.config.devices[0].zones.far if self.config.devices else -75,
+                rssi_high_timeout=self.config.timing.rssi_high_timeout,
+                rssi_low_timeout=self.config.timing.rssi_low_timeout,
             )
             self._scanner.start()
             log.info("Using passive AdvertisementMonitor scanning")
@@ -116,8 +118,10 @@ class BlueWardService:
 
         self._transition(State.SCANNING)
 
-        # Periodic timeout check (every 2 seconds)
-        self._timeout_id = GLib.timeout_add_seconds(2, self._check_timeouts)
+        # Periodic timeout check
+        self._timeout_id = GLib.timeout_add_seconds(
+            self.config.timing.check_interval, self._check_timeouts
+        )
 
         if self.config.notifications:
             notify_started()
@@ -248,7 +252,7 @@ class BlueWardService:
         # l2ping fallback for Classic BT devices that don't show up in BLE scans.
         # Only poll when device state is uncertain — NOT when already confirmed NEAR.
         # This avoids constant BT connection churn on the phone.
-        L2PING_INTERVAL = 5  # seconds between l2ping attempts
+        L2PING_INTERVAL = self.config.timing.l2ping_interval
         for device in self.devices.all_devices():
             last_ping = getattr(device, '_last_l2ping', 0)
             since_ping = now - last_ping
@@ -273,7 +277,7 @@ class BlueWardService:
             ).start()
 
         # Check for stale devices (no signal received)
-        no_signal_timeout = self.config.lock_delay * 3  # 3x lock_delay for total silence
+        no_signal_timeout = self.config.lock_delay * self.config.timing.stale_multiplier
         for device in self.devices.stale_devices(no_signal_timeout):
             if device.zone != ProximityZone.OUT_OF_RANGE:
                 log.warning("%s: no signal for %.0fs, marking out of range", device.name, device.age)
@@ -312,7 +316,7 @@ class BlueWardService:
 
     def _l2ping_poll(self, mac: str):
         """Run l2ping in a background thread, then schedule result on the main loop."""
-        reachable = try_l2ping(mac, timeout=2)
+        reachable = try_l2ping(mac, timeout=self.config.timing.l2ping_timeout)
         GLib.idle_add(self._l2ping_result, mac, reachable)
 
     def _l2ping_result(self, mac: str, reachable: bool):

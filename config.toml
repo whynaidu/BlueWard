@@ -43,6 +43,18 @@ unlock_command = ""          # Override default unlock (leave empty for notify-o
 on_lock_extra = ""           # Extra command on lock, e.g. "playerctl pause"
 on_unlock_extra = ""         # Extra command on unlock, e.g. "playerctl play"
 
+[timing]
+# All values in seconds
+scan_interval = 2.0        # BLE scan cycle interval
+lock_delay = 4             # Wait this long before locking when device leaves
+unlock_delay = 1           # Wait this long before unlocking when device returns
+check_interval = 2         # How often to poll device state
+l2ping_interval = 5        # Seconds between classic BT ping attempts
+l2ping_timeout = 2         # How long to wait for an l2ping response
+rssi_high_timeout = 3      # BlueZ AdvMonitor: seconds device must be "near"
+rssi_low_timeout = 10      # BlueZ AdvMonitor: seconds device must be "far" before lost
+stale_multiplier = 3       # Mark device stale after lock_delay × this value
+
 [filter]
 # Kalman filter parameters
 process_noise = 0.008

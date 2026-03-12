@@ -40,6 +40,19 @@ class ActionsConfig:
 
 
 @dataclass
+class TimingConfig:
+    scan_interval: float = 2.0
+    lock_delay: int = 8
+    unlock_delay: int = 3
+    check_interval: int = 2          # GLib poll interval (seconds)
+    l2ping_interval: int = 5         # Seconds between l2ping fallback attempts
+    l2ping_timeout: int = 2          # l2ping response timeout (seconds)
+    rssi_high_timeout: int = 3       # BlueZ AdvMonitor RSSI high timeout
+    rssi_low_timeout: int = 10       # BlueZ AdvMonitor RSSI low timeout
+    stale_multiplier: int = 3        # Mark device stale after lock_delay * this
+
+
+@dataclass
 class Config:
     scan_interval: float = 2.0
     lock_delay: int = 8
@@ -52,6 +65,7 @@ class Config:
     devices: list[Device] = field(default_factory=list)
     filter: FilterConfig = field(default_factory=FilterConfig)
     actions: ActionsConfig = field(default_factory=ActionsConfig)
+    timing: TimingConfig = field(default_factory=TimingConfig)
 
 
 def load_config(path: Optional[str] = None) -> Config:
@@ -73,6 +87,7 @@ def load_config(path: Optional[str] = None) -> Config:
     bw = raw.get("blueward", {})
     flt = raw.get("filter", {})
     act = raw.get("actions", {})
+    tmg = raw.get("timing", {})
 
     devices = []
     for d in raw.get("devices", []):
@@ -91,10 +106,27 @@ def load_config(path: Optional[str] = None) -> Config:
 
     policy = bw.get("policy", {})
 
+    # Timing: [timing] section overrides, with fallback to [blueward] top-level keys
+    scan_interval = tmg.get("scan_interval", bw.get("scan_interval", 2.0))
+    lock_delay = tmg.get("lock_delay", bw.get("lock_delay", 8))
+    unlock_delay = tmg.get("unlock_delay", bw.get("unlock_delay", 3))
+
+    timing = TimingConfig(
+        scan_interval=scan_interval,
+        lock_delay=lock_delay,
+        unlock_delay=unlock_delay,
+        check_interval=tmg.get("check_interval", 2),
+        l2ping_interval=tmg.get("l2ping_interval", 5),
+        l2ping_timeout=tmg.get("l2ping_timeout", 2),
+        rssi_high_timeout=tmg.get("rssi_high_timeout", 3),
+        rssi_low_timeout=tmg.get("rssi_low_timeout", 10),
+        stale_multiplier=tmg.get("stale_multiplier", 3),
+    )
+
     return Config(
-        scan_interval=bw.get("scan_interval", 2.0),
-        lock_delay=bw.get("lock_delay", 8),
-        unlock_delay=bw.get("unlock_delay", 3),
+        scan_interval=scan_interval,
+        lock_delay=lock_delay,
+        unlock_delay=unlock_delay,
         notifications=bw.get("notifications", True),
         tray_icon=bw.get("tray_icon", True),
         log_rssi=bw.get("log_rssi", False),
@@ -113,4 +145,5 @@ def load_config(path: Optional[str] = None) -> Config:
             on_lock_extra=act.get("on_lock_extra", ""),
             on_unlock_extra=act.get("on_unlock_extra", ""),
         ),
+        timing=timing,
     )
